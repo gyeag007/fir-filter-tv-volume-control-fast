@@ -1,18 +1,14 @@
 /*
-PROJECT: TV Volume Guard - stolen from http://www.instructables.com/id/TV-Volume-Loudness-Guard-using-Arduino/
-AUTHOR: Hazim Bitar (techbitar)
-DATE: FEB 9, 2013
-CONTACT: techbitar at gmail dot com
-LICENSE: My code is in the public domain.
-IRremote library: copyright by Ken Shirriff http://arcfn.com
-Modified to raise volume when commercial is over (volume is too low).
-Also modified to read peak-to-peak sound values - from Adafruit "MeasuringSoundLevels" sketch.
+PROJECT: 
 A0 is from microphone analog output.
 */
 
 #include "PinDefinitionsAndMore.h"
 #include "FIR.h"
 #include <IRremote.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
 //IRsend irsend; // instantiate IR object
  
 //#define NOISE_LEVEL_MAX    340       // Max level of noise to detect from 0 to 1023
@@ -48,6 +44,18 @@ int NOISE_LEVEL_MAX = 0; //set these to zero
 int NOISE_LEVEL_MIN = 0;
 int MUTE_LEVEL_MIN = 0;
 
+//define the variable in the stack memory, including declaration. The value of this
+//FIR_FILTER_IMPULSE_RESPONSE array is based on a design (the value represent the behaviour of the filter)
+//static float FIR_FILTER_IMPULSE_RESPONSE[FIR_FILTER_LENGTH]={0.4,0.3,0.2,0.1,0.05}; 
+
+static float FIR_FILTER_IMPULSE_RESPONSE[FIR_FILTER_LENGTH]={0.5,0.45,0.4,0.35,0.3,0.25,0.2,0.15,0.1,0.05}; 
+static float FIR_FILTER_IMPULSE_RESPONSE[FIR_FILTER_LENGTH]={0.3,0.45,0.4,0.35,0.3,0.25,0.2,0.15,0.1,0.05}; 
+
+
+float filteredOut = 0.0;
+  //Declaring the filter struct variable
+  FIRFilter fir;
+
 void setup()
 {
   pinMode(LED, OUTPUT);
@@ -57,14 +65,21 @@ void setup()
   pinMode(SWITCH_SEND, OUTPUT);
   digitalWrite(SWITCH_SEND, HIGH);
   loudMode = digitalRead(SWITCH_READ);
+
+  //Declaring the filter struct variable
+  //FIRFilter fir;
+
+  //Initialise the filter coefficient (the weight)
+  FIRFilter_init(&fir);
+
   //delay(10);
   //Serial.println("loudMode: " + loudMode);
 
   if(loudMode){
     Serial.println("loudMode true"); //riffMode
 
-    NOISE_LEVEL_MAX = 360;  //350   // rifftrax 326 269 277   choosing 280 with 130 range, avg after 287...setting bias to 0.3 with 50 rang, avg after 276
-    NOISE_LEVEL_MIN = 200;   //250
+    NOISE_LEVEL_MAX = 200;  //360   // rifftrax 326 269 277   choosing 280 with 130 range, avg after 287...setting bias to 0.3 with 50 rang, avg after 276
+    NOISE_LEVEL_MIN = 100;   //200
     MUTE_LEVEL_MIN = 50;
     digitalWrite(LED, HIGH);  // LED on
     bias = 0.3;
@@ -77,7 +92,7 @@ void setup()
     NOISE_LEVEL_MIN = 100; //220
     MUTE_LEVEL_MIN = 50;
     digitalWrite(LED, LOW); // LED off
-    bias = 0.5;
+    bias = 0.7;
   }
 
   Serial.println("TV Volume Guard");
@@ -94,21 +109,19 @@ void setup()
  
 void loop()
 {
-
-
-
   if(millis() - time_sent >= send_interval){
     
     AmbientSoundLevel = getAmbientSoundLevel();
     Serial.print("Ambient sound level: ");
     Serial.println(AmbientSoundLevel);
+
     //AmbientSoundLevel = (AmbientSoundLevel * bias) + (prevSampleAvg * (1 - bias));
 
     if (AmbientSoundLevel > NOISE_LEVEL_MAX){ // compare to noise level threshold you decide
       Serial.print("sound level is ABOVE maximum of ");
       Serial.println(NOISE_LEVEL_MAX);
       //digitalWrite(LED, HIGH); // LED on
-      delay(200);
+      //delay(200);
       Serial.println("LOWERing volume...");
       int t = 1;
       if (AmbientSoundLevel > (NOISE_LEVEL_MAX + 150)){ // compare to noise level threshold you decide
@@ -127,8 +140,9 @@ void loop()
       for (int i = 0; i < t; i++) {
         IrSender.sendSony(0x30, 0x13, 2, 15); //volume down
         lowerCount = lowerCount + 1;
-
-        delay(100);
+        if(t>1){
+          delay(25); //sony recieves in 24ms
+        }
       }
     }
 
@@ -137,13 +151,13 @@ void loop()
       Serial.print("sound level is below minimum of ");
       Serial.println(NOISE_LEVEL_MIN);
       //digitalWrite(LED, LOW); // LED off
-      delay(200);
+      //delay(200);
       Serial.println("raising volume...");
       for (int i = 0; i < 1; i++) {
         IrSender.sendSony(0x30, 0x12, 2, 15); //volume up 
         raiseCount = raiseCount + 1;
 
-        delay(100);
+        //delay(100);
       }
     }
     else if ((AmbientSoundLevel < MUTE_LEVEL_MIN))
@@ -168,11 +182,12 @@ int getAmbientSoundLevel()
   unsigned int signalMax = 0;
   unsigned int signalMin = 1024;
   unsigned int sample;
+
   unsigned int samples[100];             // Array to store samples
   int sampleAvg = 0;
   long sampleSum = 0;
  
-  for (int i = 0; i < 100; i++) {   
+  for (int i = 0; i < 20; i++) {   
     startMillis = millis(); // Start of sample window
 
     while (millis() - startMillis < sampleWindow) // collect data for 50 mS  
@@ -196,15 +211,19 @@ int getAmbientSoundLevel()
     samples[i] = peakToPeak;
 
   }
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 20; i++) {
     sampleSum = sampleSum + samples[i];
   }
 
-  sampleAvg = sampleSum/100;
+  sampleAvg = sampleSum/20; //1s sample avg
   Serial.print("sampleAvg: ");
   Serial.println(sampleAvg);
-  sampleAvg = (sampleAvg * bias) + (AmbientSoundLevel * (1- bias));
-  avgSamples[avgCount] = sampleAvg;
+  //sampleAvg = (sampleAvg * bias) + (AmbientSoundLevel * (1- bias));
+  FIRFilter_calc(&fir, sampleAvg);
+  filteredOut=fir.out;
+
+
+  avgSamples[avgCount] = filteredOut; //was sampleAvg
   avgCount = avgCount + 1;
   Serial.print("avgCount: ");
   Serial.println(avgCount);
@@ -238,8 +257,56 @@ int getAmbientSoundLevel()
     lowerCount = 0;
     rightCount = 0;
     muteCount = 0;
-  }
-  
 
-  return sampleAvg;
+  }
+  return filteredOut; //was sampleAvg
+}
+
+//function to initialise the circular buffer value
+void FIRFilter_init(FIRFilter *fir){ //use pointer to FIRFilter variable so that we do not need to copy the memory value (more efficient)
+    //clear the buffer of the filter
+    for(int i=0;i<FIR_FILTER_LENGTH;i++){
+        fir->buff[i]=0.0f;
+    }
+
+    //Reset the buffer index
+    fir->buffIndex=0;
+
+    //clear filter output
+    fir->out=0.0f; //'f' to make is as a float
+}
+
+//function to calculate (process) the filter output
+float FIRFilter_calc(FIRFilter *fir, float inputVal){
+
+    float out=0.0f;
+
+    /*Implementing CIRCULAR BUFER*/
+    //Store the latest sample=inputVal into the circular buffer
+    fir->buff[fir->buffIndex]=inputVal;
+
+    //Increase the buffer index. retrun to zero if it reach the end of the index (circular buffer)
+    fir->buffIndex++;
+    uint8_t sumIndex=fir->buffIndex;
+    if(fir->buffIndex==FIR_FILTER_LENGTH){
+        fir->buffIndex=0;
+    }
+
+    //Compute the filtered sample with convolution
+    fir->out=0.0f;
+    for(int i=0;i<FIR_FILTER_LENGTH;i++){
+        //decrese sum index and warp it if necessary
+        if(sumIndex>0){
+            sumIndex--;
+        }
+        else{
+            sumIndex=FIR_FILTER_LENGTH-1;
+        }
+        //The convolution process: Multyply the impulse response with the SHIFTED input sample and add it to the output
+        fir->out=fir->out+fir->buff[sumIndex]*FIR_FILTER_IMPULSE_RESPONSE[i];
+    }
+
+    //return the filtered data
+    return out;
+
 }
